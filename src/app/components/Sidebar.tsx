@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import type { LayerState, ActiveFront } from './MapSVG';
 
-import type { UserReport } from '../types';
+import type { UserReport, SafetyAudit } from '../types';
 
 
 interface SidebarProps {
@@ -22,7 +22,9 @@ interface SidebarProps {
   reports: UserReport[];
   activeFronts: (ActiveFront & { lngLat: [number, number] })[];
   osmLandmarks: any[]; // OSMLandmark type
-  onReportClick?: (lngLat: [number, number]) => void;
+  onReportClick?: (lngLat: [number, number], id: string) => void;
+  userLocation: [number, number] | null;
+  audits: SafetyAudit[];
 }
 
 
@@ -169,9 +171,29 @@ const SIDEBAR_W = 288; // w-72
 const SIDEBAR_LEFT = 20; // left-5
 
 
-export function Sidebar({ layers, toggleLayer, sidebarOpen, onToggleSidebar, scores, reports, activeFronts, osmLandmarks, onReportClick }: SidebarProps) {
+export function Sidebar({ 
+  layers, toggleLayer, sidebarOpen, onToggleSidebar, scores, reports, activeFronts, osmLandmarks, onReportClick, userLocation, audits 
+}: SidebarProps) {
   const [searchQuery, setSearchQuery] = useState('');
 
+  const activeFrontsNearbyCount = React.useMemo(() => {
+    if (!userLocation) return 0;
+    return activeFronts.filter(af => getHaversineDistance(userLocation, af.lngLat) < 500).length;
+  }, [userLocation, activeFronts]);
+
+  const surveillanceBadge = React.useMemo(() => {
+    if (!userLocation) return null;
+    const nearby = audits.filter(a => getHaversineDistance(userLocation, a.lngLat) < 1000);
+    if (!nearby.length) return null;
+    
+    let sum = 0;
+    nearby.forEach(a => sum += a.eyes_on_street);
+    const avg = sum / nearby.length;
+    
+    if (avg >= 4) return "Good nearby";
+    if (avg >= 2.5) return "Avg nearby";
+    return "Poor nearby";
+  }, [userLocation, audits]);
 
   const clusteredReports = React.useMemo(() => {
     const sorted = [...reports].sort((a, b) => b.timestamp - a.timestamp);
@@ -405,7 +427,7 @@ export function Sidebar({ layers, toggleLayer, sidebarOpen, onToggleSidebar, sco
                   searchResults.map((res) => (
                     <div
                       key={res.id}
-                      onClick={() => onReportClick?.(res.lngLat)}
+                      onClick={() => onReportClick?.(res.lngLat, res.id)}
                       className="flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer hover:bg-zinc-800/60 active:bg-zinc-800 group transition-all"
                     >
                       <div className="w-6 h-6 rounded flex items-center justify-center flex-shrink-0" style={{ backgroundColor: res.color + '22' }}>
@@ -442,8 +464,8 @@ export function Sidebar({ layers, toggleLayer, sidebarOpen, onToggleSidebar, sco
                   <SubOption icon={TreePine} label="Vulnerability Alerts" color="#a855f7" badge="3" />
                 </LayerToggle>
                 <LayerToggle active={layers.activeFronts} onToggle={() => toggleLayer('activeFronts')} icon={Store} label="Active Fronts" color="#10b981">
-                  <SubOption icon={Store} label="24/7 Businesses" color="#10b981" badge="4 nearby" />
-                  <SubOption icon={Eye} label="Natural Surveillance" color="#60a5fa" />
+                  <SubOption icon={Store} label="24/7 Businesses" color="#10b981" badge={activeFrontsNearbyCount > 0 ? `${activeFrontsNearbyCount} nearby` : undefined} />
+                  <SubOption icon={Eye} label="Natural Surveillance" color="#60a5fa" badge={surveillanceBadge || undefined} />
                 </LayerToggle>
               </div>
 
@@ -466,10 +488,8 @@ export function Sidebar({ layers, toggleLayer, sidebarOpen, onToggleSidebar, sco
                     <div
                       key={r.id}
                       onClick={() => {
-                        if (onReportClick) {
-                          const pos = r.isCluster ? (r.reports?.[0].lngLat) : (reports.find(orig => orig.id === r.id)?.lngLat);
-                          if (pos) onReportClick(pos);
-                        }
+                        const pos = r.isCluster ? (r.reports?.[0].lngLat) : (reports.find(orig => orig.id === r.id)?.lngLat);
+                        if (pos) onReportClick?.(pos, r.id);
                       }}
                       className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg cursor-pointer hover:bg-zinc-800/60 active:bg-zinc-800 group transition-all"
                     >

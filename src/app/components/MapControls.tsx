@@ -3,6 +3,11 @@ import { Plus, Minus, Navigation, Crosshair, Layers } from 'lucide-react';
 
 interface MapControlsProps {
   onCenterLocation?: () => void;
+  onZoomIn?: () => void;
+  onZoomOut?: () => void;
+  onResetBearing?: () => void;
+  zoom?: number;
+  bearing?: number;
 }
 
 const btnBase: React.CSSProperties = {
@@ -59,12 +64,11 @@ function ControlBtn({
   );
 }
 
-function Compass() {
-  const [rotate, setRotate] = useState(0);
+function Compass({ bearing = 0, onResetBearing }: { bearing?: number; onResetBearing?: () => void }) {
   return (
     <button
       title="Reset north"
-      onClick={() => setRotate(r => r + 90)}
+      onClick={onResetBearing}
       style={{
         ...btnBase,
         position: 'relative',
@@ -81,7 +85,7 @@ function Compass() {
         width="18"
         height="18"
         viewBox="0 0 18 18"
-        style={{ transform: `rotate(${rotate}deg)`, transition: 'transform 0.4s ease' }}
+        style={{ transform: `rotate(${-bearing}deg)`, transition: 'transform 0.4s ease' }}
       >
         {/* North - cyan */}
         <polygon points="9,2 11,9 9,7 7,9" fill="#00e5cc" opacity="0.9" />
@@ -94,8 +98,16 @@ function Compass() {
   );
 }
 
-export function MapControls({ onCenterLocation }: MapControlsProps) {
-  const [zoom, setZoom] = useState(1);
+export function MapControls({ 
+  onCenterLocation, 
+  onZoomIn, 
+  onZoomOut, 
+  onResetBearing,
+  zoom = 14,
+  bearing = 0 
+}: MapControlsProps) {
+  // Normalize zoom for the 5-pip display (assumes typical map range 12-18)
+  const normalizedZoom = Math.max(0, Math.min(4, Math.floor(zoom - 12)));
 
   return (
     <div
@@ -106,7 +118,7 @@ export function MapControls({ onCenterLocation }: MapControlsProps) {
       <ControlBtn
         icon={Plus}
         title="Zoom in"
-        onClick={() => setZoom(z => Math.min(z + 1, 5))}
+        onClick={onZoomIn}
         size={15}
       />
       {/* Zoom level pip */}
@@ -129,8 +141,8 @@ export function MapControls({ onCenterLocation }: MapControlsProps) {
               width: 4,
               height: 4,
               borderRadius: '50%',
-              backgroundColor: i < zoom ? '#00e5cc' : '#27272a',
-              boxShadow: i < zoom ? '0 0 4px #00e5cc' : 'none',
+              backgroundColor: i <= normalizedZoom ? '#00e5cc' : '#27272a',
+              boxShadow: i <= normalizedZoom ? '0 0 4px #00e5cc' : 'none',
               transition: 'all 0.2s',
             }}
           />
@@ -140,7 +152,7 @@ export function MapControls({ onCenterLocation }: MapControlsProps) {
       <ControlBtn
         icon={Minus}
         title="Zoom out"
-        onClick={() => setZoom(z => Math.max(z - 1, 1))}
+        onClick={onZoomOut}
         size={15}
       />
 
@@ -148,9 +160,9 @@ export function MapControls({ onCenterLocation }: MapControlsProps) {
       <div style={{ height: 1, background: 'rgba(255,255,255,0.06)', margin: '2px 0' }} />
 
       {/* Compass */}
-      <Compass />
+      <Compass bearing={bearing} onResetBearing={onResetBearing} />
 
-      {/* Center / My Location */}
+      {/* Center / My Location / Live View */}
       <ControlBtn
         icon={Crosshair}
         title="Center on my location"

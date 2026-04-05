@@ -1,6 +1,6 @@
 import { supabase } from '../../lib/supabase';
 import type { Incident, ActiveFront } from '../components/MapSVG';
-import type { UserReport } from '../types';
+import type { UserReport, SafetyAudit } from '../types';
 
 // Fallback arrays to mock an unconfigured database connection
 import { INCIDENTS, ACTIVE_FRONTS } from '../components/MapSVG';
@@ -131,6 +131,60 @@ export function subscribeToReports(onEvent: (event: any) => void) {
       onEvent
     )
     .subscribe();
+}
+
+// ── Safety Audits ────────────────────────────────────────────
+
+export async function getSafetyAudits(): Promise<SafetyAudit[]> {
+  if (!isSupabaseConfigured) return [];
+  const { data, error } = await supabase.from('safety_audits').select('*').order('created_at', { ascending: false });
+  if (error) { console.error('Error fetching safety audits:', error); return []; }
+  return (data || []).map((row: any) => ({
+    id: row.id,
+    lngLat: [row.lng, row.lat] as [number, number],
+    timestamp: new Date(row.created_at).getTime(),
+    illumination: row.illumination,
+    crowd_vibe: row.crowd_vibe,
+    eyes_on_street: row.eyes_on_street,
+    escape_options: row.escape_options,
+    walkability: row.walkability,
+    aura_score: row.aura_score,
+  }));
+}
+
+export async function submitSafetyAudit(
+  lngLat: [number, number],
+  params: { illumination: number; crowd_vibe: number; eyes_on_street: number; escape_options: number; walkability: number }
+): Promise<SafetyAudit | null> {
+  if (!isSupabaseConfigured) {
+    console.warn('LUME API: Mocking audit submit (Missing .env variables)');
+    return {
+      id: Date.now(),
+      lngLat,
+      timestamp: Date.now(),
+      ...params,
+      aura_score: Math.round(((params.illumination + params.crowd_vibe + params.eyes_on_street + params.escape_options + params.walkability) / 20) * 100),
+    };
+  }
+
+  const aura_score = Math.round(
+    ((params.illumination + params.crowd_vibe + params.eyes_on_street + params.escape_options + params.walkability) / 20) * 100
+  );
+
+  const { data, error } = await supabase.from('safety_audits').insert({
+    lng: lngLat[0], lat: lngLat[1],
+    ...params,
+    aura_score,
+  }).select().single();
+
+  if (error) { console.error('Error submitting safety audit:', error); return null; }
+  return {
+    id: data.id,
+    lngLat,
+    timestamp: new Date(data.created_at).getTime(),
+    ...params,
+    aura_score,
+  };
 }
 
 

@@ -8,14 +8,14 @@ import type { StretchConfig } from './components/StretchModal';
 import { MarkerInfo } from './components/MarkerInfo';
 import { MapControls } from './components/MapControls';
 import { TopBar } from './components/TopBar';
-import { Plus, Zap } from 'lucide-react';
-import type { UserReport } from './types';
+import { AuditModal } from './components/AuditModal';
+import { BranchedPopup } from './components/BranchedPopup';
+import { Plus, Zap, ShieldCheck } from 'lucide-react';
+import type { UserReport, SafetyAudit } from './types';
 import type { ReportSubmitData } from './components/ReportModal';
 import { MAP_CENTER } from '../config';
 import { fetchOSMLandmarks, type OSMLandmark } from './api/osm';
-
-
-import { getIncidents, getActiveFronts, getUserReports, submitUserReport, deleteReport, subscribeToReports } from './api/supabase';
+import { getIncidents, getActiveFronts, getUserReports, submitUserReport, deleteReport, subscribeToReports, getSafetyAudits, submitSafetyAudit } from './api/supabase';
 
 
 type MarkerPayload = { type: string; data: Incident | ActiveFront };
@@ -36,7 +36,13 @@ export default function App() {
   const [activeFronts, setActiveFronts] = useState<(ActiveFront & { lngLat: [number, number] })[]>([]);
   const [osmLandmarks, setOsmLandmarks] = useState<OSMLandmark[]>([]);
 
-  
+  // ── Safety Audit State ────────────────────────────────────────
+  const [audits, setAudits] = useState<SafetyAudit[]>([]);
+  const [showAuditModal, setShowAuditModal] = useState(false);
+  const [selectedAudit, setSelectedAudit] = useState<SafetyAudit | null>(null);
+  const [auditScreenPos, setAuditScreenPos] = useState<{ x: number; y: number } | null>(null);
+  const mapInstanceRef = useRef<any>(null); // will receive map instance from MapboxMap
+
   const [pendingLocation, setPendingLocation] = useState<[number, number] | null>(null);
   const mapCenterRef = useRef<[number, number]>(MAP_CENTER);
   const [auraScores, setAuraScores] = useState({ illumination: 70, socialSafety: 70, activeFronts: 70 });
@@ -48,18 +54,25 @@ export default function App() {
   const [stretchStart, setStretchStart] = useState<[number, number] | null>(null);
   const [stretchUploading, setStretchUploading] = useState(false);
 
+  const [mapZoom, setMapZoom] = useState(14);
+  const [mapBearing, setMapBearing] = useState(0);
+
+  const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
+
   const [dataLoading, setDataLoading] = useState(true);
 
   useEffect(() => {
     async function loadData() {
-      const [dbIncidents, dbFronts, dbReports] = await Promise.all([
+      const [dbIncidents, dbFronts, dbReports, dbAudits] = await Promise.all([
         getIncidents(),
         getActiveFronts(),
-        getUserReports()
+        getUserReports(),
+        getSafetyAudits(),
       ]);
       setIncidents(dbIncidents);
       setActiveFronts(dbFronts);
       setReports(dbReports);
+      setAudits(dbAudits);
       setDataLoading(false);
     }
     loadData();
@@ -84,6 +97,23 @@ export default function App() {
     return () => {
       if (subscription) subscription.unsubscribe();
     };
+  }, []);
+
+  // ── Geolocation Watcher ───────────────────────────────────────
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        setUserLocation([pos.coords.longitude, pos.coords.latitude]);
+      },
+      (err) => {
+        console.warn('Geolocation error:', err);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+
+    return () => navigator.geolocation.clearWatch(watchId);
   }, []);
 
   // Fetch OSM Landmarks around the MSRIT area
@@ -210,11 +240,50 @@ export default function App() {
     await Promise.all(ids.map(id => deleteReport(id)));
   }, []);
 
-  const [mapJumpLocation, setMapJumpLocation] = useState<[number, number] | null>(null);
+  const [mapJumpLocation, setMapJumpLocation] = useState<{ lngLat: [number, number]; id: string } | null>(null);
 
-  const handleReportClick = useCallback((lngLat: [number, number]) => {
-    setMapJumpLocation(lngLat);
+  const handleReportClick = useCallback((lngLat: [number, number], id: string) => {
+    setMapJumpLocation({ lngLat, id });
   }, []);
+
+  // ── Safety Audit Handlers ─────────────────────────────────────
+  const handleAuditSubmit = useCallback(async (lngLat: [number, number], params: any) => {
+    const newAudit = await submitSafetyAudit(lngLat, params);
+    if (newAudit) {
+      setAudits(prev => [newAudit, ...prev]);
+      setShowAuditModal(false);
+    }
+  }, []);
+
+  const handleAuraPinClick = useCallback((audit: SafetyAudit) => {
+    setSelectedAudit(audit);
+  }, []);
+
+  // Recompute screen pos whenever selectedAudit or map moves
+  useEffect(() => {
+    if (!selectedAudit || !mapInstanceRef.current) {
+      setAuditScreenPos(null);
+      return;
+    }
+    const map = mapInstanceRef.current;
+    const update = () => {
+      const pt = map.project(selectedAudit.lngLat);
+      setAuditScreenPos({ x: pt.x, y: pt.y });
+    };
+    update();
+    map.on('move', update);
+    return () => { map.off('move', update); };
+  }, [selectedAudit]);
+
+  const handleZoomIn = useCallback(() => { mapInstanceRef.current?.zoomIn(); }, []);
+  const handleZoomOut = useCallback(() => { mapInstanceRef.current?.zoomOut(); }, []);
+  const handleResetBearing = useCallback(() => { 
+    mapInstanceRef.current?.flyTo({ bearing: 0, pitch: 0, duration: 1000 }); 
+  }, []);
+  const handleCenterLocation = useCallback(() => { 
+    const target = userLocation || MAP_CENTER;
+    mapInstanceRef.current?.flyTo({ center: target, zoom: 16, duration: 2000 });
+  }, [userLocation]);
 
 
   return (
@@ -248,6 +317,14 @@ export default function App() {
           jumpTo={mapJumpLocation}
           onJumpComplete={() => setMapJumpLocation(null)}
           osmLandmarks={osmLandmarks}
+          audits={audits}
+          onAuraPinClick={handleAuraPinClick}
+          onMapReady={(map: any) => { mapInstanceRef.current = map; }}
+          onMapStateChange={(s) => { 
+            setMapZoom(s.zoom); 
+            setMapBearing(s.bearing);
+          }}
+          userLocation={userLocation}
         />
 
 
@@ -292,6 +369,8 @@ export default function App() {
         activeFronts={activeFronts}
         osmLandmarks={osmLandmarks}
         onReportClick={handleReportClick}
+        userLocation={userLocation}
+        audits={audits}
       />
 
 
@@ -306,7 +385,14 @@ export default function App() {
       {/* ── Map controls (right side) ── */}
       <div className="absolute inset-0 z-20 pointer-events-none">
         <div className="pointer-events-auto">
-          <MapControls />
+          <MapControls 
+            onZoomIn={handleZoomIn}
+            onZoomOut={handleZoomOut}
+            onResetBearing={handleResetBearing}
+            onCenterLocation={handleCenterLocation}
+            zoom={mapZoom}
+            bearing={mapBearing}
+          />
         </div>
       </div>
 
@@ -353,6 +439,34 @@ export default function App() {
 
       {/* ── Floating buttons bottom right ── */}
       <div className="absolute bottom-6 right-6 z-20 flex flex-col items-end gap-3 pointer-events-none">
+
+        {/* Live Safety Audit button */}
+        <div className="pointer-events-auto">
+          <button
+            onClick={() => setShowAuditModal(true)}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-full text-sm transition-all duration-200 active:scale-95"
+            style={{
+              background: 'linear-gradient(135deg, rgba(0,229,204,0.12) 0%, rgba(0,180,160,0.16) 100%)',
+              border: '1px solid rgba(0,229,204,0.30)',
+              color: '#00e5cc',
+              backdropFilter: 'blur(16px)',
+              WebkitBackdropFilter: 'blur(16px)',
+              boxShadow: '0 0 20px rgba(0,229,204,0.10), 0 4px 16px rgba(0,0,0,0.5)',
+            }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLButtonElement).style.boxShadow = '0 0 32px rgba(0,229,204,0.25), 0 4px 16px rgba(0,0,0,0.5)';
+              (e.currentTarget as HTMLButtonElement).style.borderColor = 'rgba(0,229,204,0.55)';
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLButtonElement).style.boxShadow = '0 0 20px rgba(0,229,204,0.10), 0 4px 16px rgba(0,0,0,0.5)';
+              (e.currentTarget as HTMLButtonElement).style.borderColor = 'rgba(0,229,204,0.30)';
+            }}
+          >
+            <ShieldCheck size={13} />
+            Safety Audit
+          </button>
+        </div>
+
         {/* Stretch of Unlit Road button */}
         <div className="pointer-events-auto relative">
           <button
@@ -415,6 +529,24 @@ export default function App() {
           <p className="text-center text-[9px] text-zinc-700 mt-1">or tap the map</p>
         </div>
       </div>
+
+      {/* ── Audit Modal ── */}
+      {showAuditModal && (
+        <AuditModal
+          onClose={() => setShowAuditModal(false)}
+          onSubmit={handleAuditSubmit}
+        />
+      )}
+
+      {/* ── BranchedPopup (screen-space overlay) ── */}
+      {selectedAudit && auditScreenPos && (
+        <BranchedPopup
+          audit={selectedAudit}
+          screenX={auditScreenPos.x}
+          screenY={auditScreenPos.y}
+          onClose={() => setSelectedAudit(null)}
+        />
+      )}
 
       {/* ── Stretch Modal ── */}
       {showStretchModal && (

@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import Supercluster from 'supercluster';
 import { MAP_CENTER, MAP_ZOOM, MAP_STYLE } from '../../config';
 import type { LayerState, Incident, ActiveFront } from './MapSVG';
 import { INCIDENTS } from './MapSVG';
-import type { UserReport } from '../types';
+import type { UserReport, SafetyAudit } from '../types';
 import { fetchOSMLandmarks, type OSMLandmark } from '../api/osm';
 
 
@@ -163,6 +164,45 @@ function createUserLocationEl(): HTMLElement {
   return wrapper;
 }
 
+function createAuraPinEl(auraScore: number, id: number | string, clusterCount?: number): HTMLElement {
+  const color = auraScore > 75 ? '#00e5cc' : auraScore >= 40 ? '#f59e0b' : '#ef4444';
+  const el = document.createElement('div');
+  el.dataset.auraPinId = String(id);
+  el.style.cssText = 'width:0;height:0;position:relative;cursor:pointer;';
+  
+  const badgeHTML = clusterCount && clusterCount > 1 ? `
+    <div style="position:absolute;bottom:-10px;right:-14px;background:#06080d;color:#fff;
+                font-size:9px;font-weight:700;padding:2px 4px;border-radius:4px;
+                border:1px solid ${color};z-index:2;pointer-events:none;white-space:nowrap;
+                font-family:monospace;box-shadow:0 2px 4px rgba(0,0,0,0.5);">
+      x${clusterCount}
+    </div>
+  ` : '';
+
+  el.innerHTML = `
+    <div class="lume-aura-pin" style="
+      position:absolute;top:0;left:0;
+      width:22px;height:22px;
+      background:${color};
+      border-radius:50%;
+      transform:translate(-50%,-50%);
+      box-shadow:0 0 10px ${color}, 0 0 22px ${color}55;
+      border: 1.5px solid rgba(255,255,255,0.25);
+    ">
+    </div>
+    <div style="
+      position:absolute;top:0;left:0;
+      font-size:8px;font-weight:800;
+      color:white;
+      transform:translate(-50%,-50%);
+      pointer-events:none;z-index:1;
+      text-shadow:0 1px 2px rgba(0,0,0,0.7);
+    ">${auraScore}</div>
+    ${badgeHTML}
+  `;
+  return el;
+}
+
 // ── Component ─────────────────────────────────────────────────
 interface MapboxMapProps {
   layers: LayerState;
@@ -177,9 +217,15 @@ interface MapboxMapProps {
   onRemoveReport?: (id: string) => void;
   onRemoveReports?: (ids: string[]) => void;
   onAuraScoresChange?: (scores: { illumination: number; socialSafety: number; activeFronts: number }) => void;
-  jumpTo?: [number, number] | null;
+  jumpTo?: { lngLat: [number, number]; id: string } | null;
   onJumpComplete?: () => void;
   osmLandmarks: OSMLandmark[];
+  // Safety Audit props
+  audits: SafetyAudit[];
+  onAuraPinClick: (audit: SafetyAudit) => void;
+  onMapReady?: (map: maplibregl.Map) => void;
+  onMapStateChange?: (state: { zoom: number; bearing: number }) => void;
+  userLocation: [number, number] | null;
 }
 
 
@@ -194,6 +240,8 @@ export function MapboxMap(props: MapboxMapProps) {
   // Refs for managing map entities
   const markersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
   const reportMarkersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
+  const auraPinMarkersRef = useRef<Map<number | string, maplibregl.Marker>>(new Map());
+  const clustererRef = useRef<Supercluster | null>(null);
   const pendingMarkerRef = useRef<maplibregl.Marker | null>(null);
 
 
@@ -207,14 +255,54 @@ export function MapboxMap(props: MapboxMapProps) {
 
   useEffect(() => {
     if (mapRef.current && props.jumpTo) {
-      mapRef.current.flyTo({
-        center: props.jumpTo,
+      const map = mapRef.current;
+      const { lngLat, id } = props.jumpTo;
+
+      map.flyTo({
+        center: lngLat,
         zoom: 16,
         essential: true
       });
-      props.onJumpComplete?.();
+
+      // Once move ends, try to find and trigger popup
+      const onMoveEnd = () => {
+        triggerPopupForReport(id);
+        props.onJumpComplete?.();
+      };
+
+      map.once('moveend', onMoveEnd);
     }
   }, [props.jumpTo, props.onJumpComplete]);
+
+  // ── Helper to find and trigger popup ────────────────────────
+  const triggerPopupForReport = useCallback((id: string) => {
+    let targetMarker: maplibregl.Marker | undefined;
+    
+    // Search report markers
+    for (const marker of reportMarkersRef.current.values()) {
+      const el = marker.getElement();
+      const reportIds = el.dataset.reportIds?.split(',');
+      if (reportIds?.includes(id)) {
+        targetMarker = marker;
+        break;
+      }
+    }
+    
+    // If not found, search static markers
+    if (!targetMarker) {
+      for (const [key, marker] of markersRef.current.entries()) {
+        if (key.includes(id)) {
+          targetMarker = marker;
+          break;
+        }
+      }
+    }
+
+    if (targetMarker) {
+      const el = targetMarker.getElement();
+      el.dispatchEvent(new MouseEvent('mouseenter'));
+    }
+  }, []);
 
   useEffect(() => {
     (window as any).removeLumeReport = (id: string) => {
@@ -456,6 +544,7 @@ export function MapboxMap(props: MapboxMapProps) {
 
         const canDismiss = rep.isReport;
         const dismissId = isCluster ? cluster.items.map(i => i.origId).join(',') : (rep.isReport ? rep.origId : undefined);
+        if (dismissId) el.dataset.reportIds = dismissId;
         el.dataset.popupHtml = buildPopupHTML({ type, severity, time, title, desc, dismissId });
 
       });
@@ -480,7 +569,7 @@ export function MapboxMap(props: MapboxMapProps) {
 
   const calculateAura = useCallback(() => {
     const map = mapRef.current;
-    const { onAuraScoresChange, reports } = callbacks.current;
+    const { onAuraScoresChange, reports, incidents: dbIncidents, activeFronts: dbActiveFronts, audits } = callbacks.current;
     if (!map || !onAuraScoresChange) return;
 
     const bounds = map.getBounds();
@@ -501,8 +590,6 @@ export function MapboxMap(props: MapboxMapProps) {
       }
     };
 
-    const { incidents: dbIncidents, activeFronts: dbActiveFronts } = callbacks.current;
-
     dbIncidents.forEach((inc: any) => {
       if (inc.lngLat) checkPoint(inc.lngLat[0], inc.lngLat[1], inc.type);
     });
@@ -513,14 +600,40 @@ export function MapboxMap(props: MapboxMapProps) {
 
     reports.forEach(r => checkPoint(r.lngLat[0], r.lngLat[1], r.type));
 
-    if (totalItems === 0) {
+    // ── Community Audits ──
+    let auditCount = 0;
+    let totalIllum = 0;
+    let totalSocial = 0;
+    let totalActive = 0;
+
+    audits.forEach(a => {
+      if (bounds.contains(a.lngLat)) {
+        auditCount++;
+        totalIllum += a.illumination * 20; // 1-5 scale maps to 20-100
+        totalSocial += ((a.crowd_vibe + a.escape_options) / 2) * 20;
+        totalActive += ((a.eyes_on_street + a.walkability) / 2) * 20;
+      }
+    });
+
+    if (totalItems === 0 && auditCount === 0) {
       onAuraScoresChange({ illumination: 70, socialSafety: 70, activeFronts: 70 });
       return;
     }
 
-    const illumination = Math.max(30, 95 - 15 * visibleBrokenLight);
-    const socialSafety = Math.max(0, 100 - 20 * visibleHarassment - 10 * visibleSecluded);
-    const activeFronts = Math.min(100, visibleActiveFronts * 20);
+    const baseIllum = Math.max(30, 95 - 15 * visibleBrokenLight);
+    const baseSocial = Math.max(0, 100 - 20 * visibleHarassment - 10 * visibleSecluded);
+    const baseActive = Math.min(100, visibleActiveFronts * 20);
+
+    let illumination = baseIllum;
+    let socialSafety = baseSocial;
+    let activeFronts = baseActive;
+
+    if (auditCount > 0) {
+      // Blend base infrastructure scores 50/50 with subjective community audit sentiment
+      illumination = Math.round((baseIllum + (totalIllum / auditCount)) / 2);
+      socialSafety = Math.round((baseSocial + (totalSocial / auditCount)) / 2);
+      activeFronts = Math.round((baseActive + (totalActive / auditCount)) / 2);
+    }
 
     onAuraScoresChange({ illumination, socialSafety, activeFronts });
   }, []);
@@ -704,6 +817,22 @@ export function MapboxMap(props: MapboxMapProps) {
       markersRef.current.set('user', userMarker);
 
       setMapLoaded(true); // Triggers dependent hooks safely
+      callbacks.current.onMapReady?.(map);
+
+      const emitMapState = () => {
+        callbacks.current.onMapStateChange?.({
+          zoom: map.getZoom(),
+          bearing: map.getBearing()
+        });
+      };
+
+      map.on('move', emitMapState);
+      map.on('zoom', emitMapState);
+      map.on('rotate', emitMapState);
+      
+      // Emit initial state
+      emitMapState();
+
       updateMarkerVisibility();
       calculateAura();
     });
@@ -722,6 +851,7 @@ export function MapboxMap(props: MapboxMapProps) {
     // Toggle Layers
     const setVis = (id: string, vis: boolean) => mapRef.current?.setLayoutProperty(id, 'visibility', vis ? 'visible' : 'none');
     Object.values(LUMEN_LAYERS).forEach((id) => setVis(id, props.layers.lumen));
+    Object.values(ACTIVE_FRONT_LAYERS).forEach((id) => setVis(id, props.layers.activeFronts));
 
     // Force marker re-render as visibilities are now actively enforced in renderMarkers and updateMarkerVisibility
     renderMarkers();
@@ -825,6 +955,139 @@ export function MapboxMap(props: MapboxMapProps) {
 
 
 
+
+  // ── Sync Safety Audit AuraPins (Clustered) ─────────────────────────
+  const updateClusters = useCallback(() => {
+    if (!mapLoaded || !mapRef.current || !clustererRef.current) return;
+    const map = mapRef.current;
+    
+    // Sometimes bounds return undefined right at load
+    const bounds = map.getBounds();
+    if (!bounds) return;
+
+    const zoom = Math.round(map.getZoom());
+    const bbox: [number, number, number, number] = [
+      bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()
+    ];
+
+    const clusters = clustererRef.current.getClusters(bbox, zoom);
+    const existingIds = new Set(auraPinMarkersRef.current.keys());
+
+    clusters.forEach(cluster => {
+      const isCluster = cluster.properties.cluster;
+      const pinId = isCluster ? `cluster-${cluster.properties.cluster_id}` : cluster.properties.id;
+      
+      existingIds.delete(pinId);
+      if (auraPinMarkersRef.current.has(pinId)) return;
+
+      let score: number;
+      let el: HTMLElement;
+      let auditToPass: SafetyAudit;
+
+      if (isCluster) {
+        const p = cluster.properties;
+        const avg_illum = Math.round(p.sum_illum / p.count);
+        const avg_vibe = Math.round(p.sum_vibe / p.count);
+        const avg_eyes = Math.round(p.sum_eyes / p.count);
+        const avg_escape = Math.round(p.sum_escape / p.count);
+        const avg_walk = Math.round(p.sum_walk / p.count);
+        
+        score = Math.round(((avg_illum + avg_vibe + avg_eyes + avg_escape + avg_walk) / 25) * 100);
+        
+        // Negative ID ensures it won't conflict with real IDs in BranchedPopup logic
+        auditToPass = {
+          id: -p.cluster_id, 
+          lngLat: cluster.geometry.coordinates as [number, number],
+          timestamp: Date.now(),
+          illumination: avg_illum,
+          crowd_vibe: avg_vibe,
+          eyes_on_street: avg_eyes,
+          escape_options: avg_escape,
+          walkability: avg_walk,
+          aura_score: score
+        };
+        el = createAuraPinEl(score, pinId, p.count);
+      } else {
+        auditToPass = cluster.properties as SafetyAudit;
+        score = auditToPass.aura_score;
+        el = createAuraPinEl(score, pinId);
+      }
+
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        callbacks.current.onAuraPinClick(auditToPass);
+      });
+
+      const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
+        .setLngLat(cluster.geometry.coordinates as [number, number])
+        .addTo(map);
+
+      auraPinMarkersRef.current.set(pinId, marker);
+    });
+
+    existingIds.forEach(id => {
+      auraPinMarkersRef.current.get(id)?.remove();
+      auraPinMarkersRef.current.delete(id);
+    });
+  }, [mapLoaded]);
+
+  useEffect(() => {
+    if (!mapLoaded) return;
+
+    const index = new Supercluster({
+      radius: 40,
+      maxZoom: 16,
+      map: (props) => ({
+        sum_illum: props.illumination,
+        sum_vibe: props.crowd_vibe,
+        sum_eyes: props.eyes_on_street,
+        sum_escape: props.escape_options,
+        sum_walk: props.walkability,
+        count: 1
+      }),
+      reduce: (acc, props: any) => {
+        acc.sum_illum += props.sum_illum;
+        acc.sum_vibe += props.sum_vibe;
+        acc.sum_eyes += props.sum_eyes;
+        acc.sum_escape += props.sum_escape;
+        acc.sum_walk += props.sum_walk;
+        acc.count += props.count;
+      }
+    });
+
+    const points: any[] = props.audits.map(audit => ({
+      type: 'Feature',
+      properties: { ...audit },
+      geometry: { type: 'Point', coordinates: audit.lngLat }
+    }));
+
+    index.load(points);
+    clustererRef.current = index;
+    updateClusters();
+  }, [mapLoaded, props.audits, updateClusters]);
+
+  // Handle map movement events to update rendered clusters
+  useEffect(() => {
+    if (!mapLoaded || !mapRef.current) return;
+    const map = mapRef.current;
+    
+    map.on('move', updateClusters);
+    map.on('moveend', updateClusters);
+    
+    return () => {
+      map.off('move', updateClusters);
+      map.off('moveend', updateClusters);
+    };
+  }, [mapLoaded, updateClusters]);
+
+  // ── Sync User Location ──────────────────────────────────────────
+  useEffect(() => {
+    if (!mapLoaded || !mapRef.current || !props.userLocation) return;
+    const userMarker = markersRef.current.get('user');
+    if (userMarker) {
+      userMarker.setLngLat(props.userLocation);
+    }
+  }, [mapLoaded, props.userLocation]);
 
   return <div ref={containerRef} style={{ width: '100%', height: '100%', position: 'absolute', inset: 0 }} />;
 }
