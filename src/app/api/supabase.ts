@@ -163,15 +163,16 @@ export async function submitSafetyAudit(
       lngLat,
       timestamp: Date.now(),
       ...params,
-      aura_score: Math.round(((params.illumination + params.crowd_vibe + params.eyes_on_street + params.escape_options + params.walkability) / 20) * 100),
+      aura_score: Math.round(((params.illumination + params.crowd_vibe + params.eyes_on_street + params.escape_options + params.walkability) / 25) * 100),
     };
   }
 
   const aura_score = Math.round(
-    ((params.illumination + params.crowd_vibe + params.eyes_on_street + params.escape_options + params.walkability) / 20) * 100
+    ((params.illumination + params.crowd_vibe + params.eyes_on_street + params.escape_options + params.walkability) / 25) * 100
   );
 
   const { data, error } = await supabase.from('safety_audits').insert({
+    id: Date.now(), // Bypass out-of-sync identity sequence from CSV imports
     lng: lngLat[0], lat: lngLat[1],
     ...params,
     aura_score,

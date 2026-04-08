@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { MapPin, Loader2, X, ShieldCheck, AlertTriangle } from 'lucide-react';
 import type { SafetyAudit } from '../types';
 
@@ -113,13 +113,14 @@ function SegmentedControl({
 interface AuditModalProps {
   onClose: () => void;
   onSubmit: (lngLat: [number, number], params: AuditParams) => Promise<void>;
+  userLocation?: [number, number] | null;
 }
 
 type GpsState = 'idle' | 'locking' | 'locked' | 'denied' | 'error';
 
-export function AuditModal({ onClose, onSubmit }: AuditModalProps) {
-  const [gpsState, setGpsState] = useState<GpsState>('idle');
-  const [lngLat, setLngLat] = useState<[number, number] | null>(null);
+export function AuditModal({ onClose, onSubmit, userLocation }: AuditModalProps) {
+  const [gpsState, setGpsState] = useState<GpsState>(userLocation ? 'locked' : 'idle');
+  const [lngLat, setLngLat] = useState<[number, number] | null>(userLocation || null);
   const [params, setParams] = useState<AuditParams>({ ...DEFAULT_PARAMS });
   const [submitting, setSubmitting] = useState(false);
 
@@ -140,11 +141,23 @@ export function AuditModal({ onClose, onSubmit }: AuditModalProps) {
     );
   }, []);
 
+  useEffect(() => {
+    if (userLocation && !lngLat) {
+      setLngLat(userLocation);
+      setGpsState('locked');
+    }
+  }, [userLocation, lngLat]);
+
   const handleSubmit = async () => {
     if (!lngLat) return;
     setSubmitting(true);
-    await onSubmit(lngLat, params);
-    setSubmitting(false);
+    try {
+      await onSubmit(lngLat, params);
+    } catch (err) {
+      console.error('Audit submission error:', err);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const setParam = (key: ParamKey, val: number) =>
@@ -208,181 +221,141 @@ export function AuditModal({ onClose, onSubmit }: AuditModalProps) {
 
         <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 20 }}>
 
-          {/* GPS Section */}
-          {gpsState !== 'locked' && (
+          {/* GPS Status Badge (replaced full screen lock) */}
+          <div
+            style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: '8px 12px', borderRadius: 8,
+              background: gpsState === 'locked' ? 'rgba(0,229,204,0.07)' : (gpsState === 'error' || gpsState === 'denied' ? 'rgba(239,68,68,0.07)' : 'rgba(255,255,255,0.03)'),
+              border: `1px solid ${gpsState === 'locked' ? 'rgba(0,229,204,0.2)' : (gpsState === 'error' || gpsState === 'denied' ? 'rgba(239,68,68,0.2)' : 'rgba(255,255,255,0.06)')}`,
+            }}
+          >
+            {gpsState === 'locked' ? (
+              <>
+                <MapPin size={13} color="#00e5cc" />
+                <span style={{ color: '#00e5cc', fontSize: 11, fontWeight: 600 }}>GPS Locked</span>
+                <span style={{ color: '#3f3f46', fontSize: 10, marginLeft: 'auto', fontFamily: 'monospace' }}>
+                  {lngLat ? `${lngLat[1].toFixed(4)}, ${lngLat[0].toFixed(4)}` : 'Detecting...'}
+                </span>
+              </>
+            ) : gpsState === 'locking' ? (
+              <>
+                <Loader2 size={13} color="#00e5cc" style={{ animation: 'lume-spin 1s linear infinite' }} />
+                <span style={{ color: '#a1a1aa', fontSize: 11 }}>Locating you...</span>
+              </>
+            ) : (gpsState === 'error' || gpsState === 'denied') ? (
+              <>
+                <AlertTriangle size={13} color="#ef4444" />
+                <span style={{ color: '#fca5a5', fontSize: 11 }}>{gpsState === 'denied' ? 'Location Denied' : 'GPS Error'}</span>
+                <button 
+                  onClick={handleGpsLock}
+                  style={{ marginLeft: 'auto', background: 'none', border: 'none', color: '#fca5a5', fontSize: 10, cursor: 'pointer', textDecoration: 'underline' }}
+                >
+                  Retry
+                </button>
+              </>
+            ) : (
+              <>
+                <MapPin size={13} color="#52525b" />
+                <span style={{ color: '#71717a', fontSize: 11 }}>Location not locked</span>
+                <button 
+                  onClick={handleGpsLock}
+                  style={{ marginLeft: 'auto', background: 'none', border: 'none', color: '#00e5cc', fontSize: 10, cursor: 'pointer', textDecoration: 'underline' }}
+                >
+                  Lock GPS
+                </button>
+              </>
+            )}
+          </div>
+
+          {/* Parameters (Always visible now) */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            {PARAMS.map((p) => (
+              <div key={p.key}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: 14 }}>{p.icon}</span>
+                    <span style={{ color: '#e4e4e7', fontSize: 12, fontWeight: 600 }}>{p.label}</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, fontSize: 10, color: '#52525b' }}>
+                    <span>{p.lo}</span>
+                    <span>→</span>
+                    <span style={{ color: p.color }}>{p.hi}</span>
+                  </div>
+                </div>
+                <SegmentedControl
+                  value={params[p.key]}
+                  onChange={(v) => setParam(p.key, v)}
+                  color={p.color}
+                />
+              </div>
+            ))}
+          </div>
+
+          {/* Live Aura Score */}
+          <div
+            style={{
+              borderRadius: 12,
+              padding: '16px',
+              background: `linear-gradient(135deg, ${color}10 0%, ${color}08 100%)`,
+              border: `1px solid ${color}30`,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 16,
+            }}
+          >
             <div
               style={{
-                borderRadius: 12,
-                padding: '16px',
-                border: `1px solid ${gpsState === 'denied' || gpsState === 'error' ? 'rgba(239,68,68,0.3)' : 'rgba(255,255,255,0.07)'}`,
-                background: gpsState === 'denied' || gpsState === 'error' ? 'rgba(239,68,68,0.06)' : 'rgba(255,255,255,0.02)',
+                width: 56, height: 56,
+                borderRadius: '50%',
+                border: `2px solid ${color}55`,
+                boxShadow: `0 0 16px ${color}33`,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                flexShrink: 0,
               }}
             >
-              {gpsState === 'idle' && (
-                <div style={{ textAlign: 'center' }}>
-                  <MapPin size={28} color="#00e5cc" style={{ margin: '0 auto 10px' }} />
-                  <p style={{ color: '#e4e4e7', fontSize: 13, fontWeight: 600, margin: '0 0 6px' }}>
-                    Lock Your Location
-                  </p>
-                  <p style={{ color: '#71717a', fontSize: 11, margin: '0 0 14px', lineHeight: 1.5 }}>
-                    Audits must be performed at your current physical location. We'll use GPS to pin your exact coordinates.
-                  </p>
-                  <button
-                    onClick={handleGpsLock}
-                    style={{
-                      padding: '9px 24px',
-                      borderRadius: 8,
-                      background: 'linear-gradient(135deg, rgba(0,229,204,0.15) 0%, rgba(0,180,160,0.2) 100%)',
-                      border: '1px solid rgba(0,229,204,0.35)',
-                      color: '#00e5cc',
-                      fontSize: 12,
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      transition: 'all 0.2s',
-                    }}
-                  >
-                    Request GPS Lock
-                  </button>
-                </div>
-              )}
-
-              {gpsState === 'locking' && (
-                <div style={{ textAlign: 'center' }}>
-                  <Loader2 size={28} color="#00e5cc" style={{ margin: '0 auto 10px', animation: 'lume-spin 1s linear infinite' }} />
-                  <p style={{ color: '#a1a1aa', fontSize: 12, margin: 0 }}>Acquiring GPS signal…</p>
-                </div>
-              )}
-
-              {(gpsState === 'denied' || gpsState === 'error') && (
-                <div style={{ textAlign: 'center' }}>
-                  <AlertTriangle size={28} color="#ef4444" style={{ margin: '0 auto 10px' }} />
-                  <p style={{ color: '#fca5a5', fontSize: 13, fontWeight: 600, margin: '0 0 6px' }}>
-                    {gpsState === 'denied' ? 'Location Access Denied' : 'GPS Error'}
-                  </p>
-                  <p style={{ color: '#71717a', fontSize: 11, margin: '0 0 12px' }}>
-                    {gpsState === 'denied'
-                      ? 'Please allow location access in your browser settings and try again.'
-                      : 'Could not get your location. Please try again.'}
-                  </p>
-                  <button
-                    onClick={handleGpsLock}
-                    style={{ padding: '8px 20px', borderRadius: 8, border: '1px solid rgba(239,68,68,0.4)', background: 'rgba(239,68,68,0.1)', color: '#fca5a5', fontSize: 11, cursor: 'pointer' }}
-                  >
-                    Try Again
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* GPS Locked Badge */}
-          {gpsState === 'locked' && lngLat && (
-            <div
-              style={{
-                display: 'flex', alignItems: 'center', gap: 8,
-                padding: '8px 12px', borderRadius: 8,
-                background: 'rgba(0,229,204,0.07)',
-                border: '1px solid rgba(0,229,204,0.2)',
-              }}
-            >
-              <MapPin size={13} color="#00e5cc" />
-              <span style={{ color: '#00e5cc', fontSize: 11, fontWeight: 600 }}>GPS Locked</span>
-              <span style={{ color: '#3f3f46', fontSize: 10, marginLeft: 'auto', fontFamily: 'monospace' }}>
-                {lngLat[1].toFixed(4)}, {lngLat[0].toFixed(4)}
+              <span style={{ color, fontSize: 18, fontWeight: 800, fontFamily: 'monospace' }}>
+                {auraScore}
               </span>
             </div>
-          )}
+            <div>
+              <p style={{ color, fontSize: 12, fontWeight: 700, margin: '0 0 2px' }}>
+                {auraScore > 75 ? 'High Safety Aura' : auraScore >= 40 ? 'Moderate Aura' : 'Low Safety Aura'}
+              </p>
+              <p style={{ color: '#52525b', fontSize: 10, margin: 0, lineHeight: 1.4 }}>
+                Live score · Updates as you adjust the parameters above
+              </p>
+            </div>
+          </div>
 
-          {/* Parameters (shown after GPS lock) */}
-          {gpsState === 'locked' && (
-            <>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                {PARAMS.map((p) => (
-                  <div key={p.key}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <span style={{ fontSize: 14 }}>{p.icon}</span>
-                        <span style={{ color: '#e4e4e7', fontSize: 12, fontWeight: 600 }}>{p.label}</span>
-                      </div>
-                      <div style={{ display: 'flex', gap: 8, fontSize: 10, color: '#52525b' }}>
-                        <span>{p.lo}</span>
-                        <span>→</span>
-                        <span style={{ color: p.color }}>{p.hi}</span>
-                      </div>
-                    </div>
-                    <SegmentedControl
-                      value={params[p.key]}
-                      onChange={(v) => setParam(p.key, v)}
-                      color={p.color}
-                    />
-                  </div>
-                ))}
-              </div>
-
-              {/* Live Aura Score */}
-              <div
-                style={{
-                  borderRadius: 12,
-                  padding: '16px',
-                  background: `linear-gradient(135deg, ${color}10 0%, ${color}08 100%)`,
-                  border: `1px solid ${color}30`,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 16,
-                }}
-              >
-                <div
-                  style={{
-                    width: 56, height: 56,
-                    borderRadius: '50%',
-                    border: `2px solid ${color}55`,
-                    boxShadow: `0 0 16px ${color}33`,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    flexShrink: 0,
-                  }}
-                >
-                  <span style={{ color, fontSize: 18, fontWeight: 800, fontFamily: 'monospace' }}>
-                    {auraScore}
-                  </span>
-                </div>
-                <div>
-                  <p style={{ color, fontSize: 12, fontWeight: 700, margin: '0 0 2px' }}>
-                    {auraScore > 75 ? 'High Safety Aura' : auraScore >= 40 ? 'Moderate Aura' : 'Low Safety Aura'}
-                  </p>
-                  <p style={{ color: '#52525b', fontSize: 10, margin: 0, lineHeight: 1.4 }}>
-                    Live score · Updates as you adjust the parameters above
-                  </p>
-                </div>
-              </div>
-
-              {/* Submit */}
-              <button
-                onClick={handleSubmit}
-                disabled={submitting}
-                style={{
-                  width: '100%',
-                  padding: '12px',
-                  borderRadius: 10,
-                  background: submitting
-                    ? 'rgba(255,255,255,0.04)'
-                    : `linear-gradient(135deg, ${color}22 0%, ${color}18 100%)`,
-                  border: `1px solid ${color}45`,
-                  color: submitting ? '#52525b' : color,
-                  fontSize: 13,
-                  fontWeight: 700,
-                  cursor: submitting ? 'not-allowed' : 'pointer',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                  transition: 'all 0.2s',
-                  boxShadow: submitting ? 'none' : `0 0 20px ${color}18`,
-                }}
-              >
-                {submitting
-                  ? <><Loader2 size={14} style={{ animation: 'lume-spin 1s linear infinite' }} />Submitting to network…</>
-                  : <><ShieldCheck size={14} />Submit Safety Audit</>
-                }
-              </button>
-            </>
-          )}
+          {/* Submit */}
+          <button
+            onClick={handleSubmit}
+            disabled={submitting || !lngLat}
+            style={{
+              width: '100%',
+              padding: '12px',
+              borderRadius: 10,
+              background: (submitting || !lngLat)
+                ? 'rgba(255,255,255,0.04)'
+                : `linear-gradient(135deg, ${color}22 0%, ${color}18 100%)`,
+              border: `1px solid ${color}45`,
+              color: (submitting || !lngLat) ? '#52525b' : color,
+              fontSize: 13,
+              fontWeight: 700,
+              cursor: (submitting || !lngLat) ? 'not-allowed' : 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+              transition: 'all 0.2s',
+              boxShadow: (submitting || !lngLat) ? 'none' : `0 0 20px ${color}18`,
+            }}
+          >
+            {submitting
+              ? <><Loader2 size={14} style={{ animation: 'lume-spin 1s linear infinite' }} />Submitting to network…</>
+              : !lngLat 
+                ? <><MapPin size={14} />Waiting for GPS Lock...</>
+                : <><ShieldCheck size={14} />Submit Safety Audit</>
+            }
+          </button>
         </div>
       </div>
     </div>

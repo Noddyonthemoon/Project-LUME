@@ -143,10 +143,12 @@ export function BranchedPopup({ audit, screenX, screenY, onClose }: BranchedPopu
           viewBox={`${-half} ${-half} ${CANVAS_SIZE} ${CANVAS_SIZE}`}
           style={{ position: 'absolute', inset: 0, overflow: 'visible', pointerEvents: 'none' }}
         >
-          {/* Center glow ring */}
-          <circle cx={0} cy={0} r={26} fill={`${color}14`} stroke={`${color}30`} strokeWidth={1} />
+          {/* Center dark overlay background */}
+          <circle cx={0} cy={0} r={32} fill="#06080c" opacity={0.9} />
+          <circle cx={0} cy={0} r={32} fill="none" stroke={`${color}30`} strokeWidth={1} />
+          
           <circle
-            cx={0} cy={0} r={26}
+            cx={0} cy={0} r={28}
             fill="none"
             stroke={color}
             strokeWidth={2}
@@ -171,10 +173,10 @@ export function BranchedPopup({ audit, screenX, screenY, onClose }: BranchedPopu
           className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center justify-center"
           style={{ pointerEvents: 'none', zIndex: 2 }}
         >
-          <span className="font-black font-mono leading-none" style={{ color, fontSize: 15 }}>
+          <span className="font-black font-mono leading-none" style={{ color: '#fff', fontSize: 22, textShadow: `0 0 10px ${color}88` }}>
             {audit.aura_score}
           </span>
-          <span className="text-[8px] tracking-widest uppercase" style={{ color: '#52525b', letterSpacing: '0.14em' }}>
+          <span className="text-[9px] tracking-widest uppercase mt-0.5" style={{ color, opacity: 0.8, letterSpacing: '0.14em' }}>
             aura
           </span>
         </div>

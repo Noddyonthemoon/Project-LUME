@@ -252,6 +252,8 @@ export default function App() {
     if (newAudit) {
       setAudits(prev => [newAudit, ...prev]);
       setShowAuditModal(false);
+    } else {
+      alert('Failed to submit audit. The network might be experiencing a conflict or connection issue. Please try again.');
     }
   }, []);
 
@@ -407,8 +409,10 @@ export default function App() {
 
       {/* ── Legend strip (bottom centre) ── */}
       <div
-        className="absolute bottom-5 left-1/2 -translate-x-1/2 z-20 flex items-center gap-4 px-4 py-2 rounded-full pointer-events-none"
+        className="absolute bottom-4 z-20 flex items-center gap-4 px-4 py-2 rounded-full pointer-events-none transition-all duration-300"
         style={{
+          left: sidebarOpen ? 'calc(50% + 154px)' : 'calc(50% + 15px)',
+          transform: 'translateX(-50%)',
           background: 'rgba(8,10,14,0.78)',
           backdropFilter: 'blur(16px)',
           WebkitBackdropFilter: 'blur(16px)',
@@ -535,6 +539,7 @@ export default function App() {
         <AuditModal
           onClose={() => setShowAuditModal(false)}
           onSubmit={handleAuditSubmit}
+          userLocation={userLocation}
         />
       )}
 

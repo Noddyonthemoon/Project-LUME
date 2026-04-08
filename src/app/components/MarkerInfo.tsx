@@ -10,7 +10,7 @@ interface MarkerInfoProps {
   onClose: () => void;
 }
 
-const INCIDENT_META: Record<string, { color: string; icon: React.ComponentType<{ size?: number }>; bg: string; label: string }> = {
+const INCIDENT_META: Record<string, { color: string; icon: React.ComponentType<any>; bg: string; label: string }> = {
   harassment: { color: '#ef4444', icon: TriangleAlert, bg: '#ef444418', label: 'Harassment' },
   'broken-light': { color: '#f59e0b', icon: Zap, bg: '#f59e0b18', label: 'Broken Light' },
   secluded: { color: '#a855f7', icon: TreePine, bg: '#a855f718', label: 'Secluded Area' },
@@ -46,7 +46,7 @@ export function MarkerInfo({ marker, onClose }: MarkerInfoProps) {
 
   return (
     <div
-      className="absolute bottom-5 left-[calc(288px+40px)] right-5 max-w-sm rounded-xl overflow-hidden pointer-events-auto"
+      className="absolute bottom-[84px] left-[calc(288px+40px)] right-5 max-w-sm rounded-xl overflow-hidden pointer-events-auto"
       style={{
         background: 'rgba(8, 10, 16, 0.92)',
         backdropFilter: 'blur(20px)',
